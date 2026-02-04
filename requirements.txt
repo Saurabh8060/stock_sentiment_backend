@@ -1,0 +1,8 @@
+transformers
+datasets
+torch
+scikit-learn
+fastapi
+uvicorn
+pydantic
+requests
