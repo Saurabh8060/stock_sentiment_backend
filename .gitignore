@@ -6,3 +6,5 @@ venv/
 outputs/
 __pycache__/
 *.pyc
+model/*.safetensors
+model/*.bin
