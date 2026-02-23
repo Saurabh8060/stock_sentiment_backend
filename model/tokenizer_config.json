@@ -5,7 +5,7 @@
   "cls_token": "<s>",
   "eos_token": "</s>",
   "errors": "replace",
-  "is_local": false,
+  "is_local": true,
   "mask_token": "<mask>",
   "model_max_length": 512,
   "pad_token": "<pad>",

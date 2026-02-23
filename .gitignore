@@ -7,5 +7,13 @@ outputs/
 __pycache__/
 *.pyc
 model/*.safetensors
+*.safetensors
 model/*.bin
 .DS_Store
+.hf_datasets_cache/
+__pycache__/
+*.lock
+
+*.safetensors
+.hf_datasets_cache/
+*.lock

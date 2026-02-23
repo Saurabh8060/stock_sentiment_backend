@@ -16,7 +16,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Next.js
+    allow_origins=["http://localhost:3000", "http://localhost:3001"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,6 +26,9 @@ predictor = SentimentPredictor()
 logger = logging.getLogger("api")
 _LAST_GOOD_RESPONSE: dict[str, Any] | None = None
 _LAST_GOOD_AT: datetime | None = None
+DASHBOARD_MAX_RECORDS = 50
+GDELT_BACKOFF_SECONDS = int(os.getenv("GDELT_BACKOFF_SECONDS", "300"))
+_GDELT_BACKOFF_UNTIL: datetime | None = None
 
 class Request(BaseModel):
     text: str
@@ -57,20 +60,21 @@ class EmailRequest(BaseModel):
 async def dashboard(keyword: str = "AAPL"):
     now = datetime.now(timezone.utc)
 
-    try:
-        from data_sources.gdelt_client import fetch_gdelt_articles
-    except Exception as exc:
-        logger.exception("Failed to import GDELT client: %s", exc)
-        return _empty_dashboard(now)
-
     end_dt = now
     start_dt = now - timedelta(days=3)
 
     try:
-        articles = fetch_gdelt_articles(keyword, start_dt, end_dt, max_records=100)
-        logger.info("GDELT articles fetched: %s", len(articles))
+        articles = _fetch_articles_with_fallback(
+            keyword,
+            start_dt,
+            end_dt,
+            max_records=DASHBOARD_MAX_RECORDS,
+        )
     except Exception as exc:
-        logger.exception("Failed to fetch GDELT articles: %s", exc)
+        logger.exception("Failed to fetch any articles: %s", exc)
+        return _fallback_or_empty(now)
+    if not articles:
+        logger.warning("No articles found for keyword=%s", keyword)
         return _fallback_or_empty(now)
 
     bucket_count = 6
@@ -112,6 +116,43 @@ async def dashboard(keyword: str = "AAPL"):
     }
     _store_last_good(response)
     return response
+
+
+def _fetch_articles_with_fallback(
+    keyword: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    max_records: int,
+) -> list[dict[str, Any]]:
+    global _GDELT_BACKOFF_UNTIL
+    articles: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    gdelt_allowed = _GDELT_BACKOFF_UNTIL is None or now >= _GDELT_BACKOFF_UNTIL
+
+    if gdelt_allowed:
+        try:
+            from data_sources.gdelt_client import fetch_gdelt_articles
+            articles = fetch_gdelt_articles(keyword, start_dt, end_dt, max_records=max_records)
+            logger.info("GDELT articles fetched: %s", len(articles))
+            if articles:
+                _GDELT_BACKOFF_UNTIL = None
+        except Exception as exc:
+            _GDELT_BACKOFF_UNTIL = now + timedelta(seconds=max(30, GDELT_BACKOFF_SECONDS))
+            logger.warning("GDELT fetch failed, switching to RSS fallback: %s", exc)
+    else:
+        logger.info("Skipping GDELT fetch due to backoff until %s", _GDELT_BACKOFF_UNTIL.isoformat())
+
+    if articles:
+        return articles
+
+    try:
+        from data_sources.rss_client import fetch_google_news_articles
+        articles = fetch_google_news_articles(keyword, max_records=max_records)
+        logger.info("RSS fallback articles fetched: %s", len(articles))
+        return articles
+    except Exception as exc:
+        logger.warning("RSS fallback failed: %s", exc)
+        return []
 
 
 def _init_trend_buckets(
